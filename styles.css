@@ -1,0 +1,140 @@
+:root {
+  color-scheme: dark;
+  --panel-bg: rgba(28, 25, 23, 0.78);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --accent: #fbbf24;
+  --accent-soft: rgba(251, 191, 36, 0.18);
+  --danger: #fb7185;
+  --success: #34d399;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "DM Sans", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(251, 191, 36, 0.18), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(248, 113, 113, 0.14), transparent 28%),
+    linear-gradient(180deg, #09090b 0%, #1c1917 100%);
+}
+
+.font-display {
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.panel {
+  position: relative;
+  border: 1px solid var(--panel-border);
+  border-radius: 2rem;
+  background: var(--panel-bg);
+  backdrop-filter: blur(22px);
+}
+
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), transparent 35%);
+}
+
+.card-block {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1.5rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(252, 211, 77, 0.88);
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1rem;
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: rgba(214, 211, 209, 0.72);
+}
+
+.stat-value {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: white;
+}
+
+.ambient {
+  position: fixed;
+  border-radius: 999px;
+  filter: blur(100px);
+  opacity: 0.6;
+  pointer-events: none;
+  animation: float 12s ease-in-out infinite;
+}
+
+.ambient-1 {
+  top: 8%;
+  left: 2%;
+  width: 18rem;
+  height: 18rem;
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.ambient-2 {
+  right: 4%;
+  bottom: 12%;
+  width: 22rem;
+  height: 22rem;
+  background: rgba(251, 113, 133, 0.12);
+  animation-delay: -4s;
+}
+
+.player-entry.active-voice {
+  border-color: rgba(251, 146, 60, 0.9);
+  box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.5), 0 0 28px rgba(251, 146, 60, 0.22);
+}
+
+.dealer-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.18);
+  color: #fde68a;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.winner-card {
+  border-radius: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1.1rem 1.15rem;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -18px, 0) scale(1.06);
+  }
+}
