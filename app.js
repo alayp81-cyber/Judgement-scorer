@@ -33,6 +33,7 @@ const state = {
   rounds: [],
   currentRoundIndex: 0,
   phase: "setup",
+  selectedStartCards: 13,
   conversationalMode: false,
   voiceTarget: null,
   pendingTargetIndex: null,
@@ -50,6 +51,9 @@ const elements = {
   finalView: document.getElementById("finalView"),
   playerCount: document.getElementById("playerCount"),
   playerCountValue: document.getElementById("playerCountValue"),
+  maxCards: document.getElementById("maxCards"),
+  maxCardsValue: document.getElementById("maxCardsValue"),
+  maxCardsHint: document.getElementById("maxCardsHint"),
   playerNamesContainer: document.getElementById("playerNamesContainer"),
   randomizeNamesBtn: document.getElementById("randomizeNamesBtn"),
   startGameBtn: document.getElementById("startGameBtn"),
@@ -81,6 +85,7 @@ initialize();
 
 function initialize() {
   bindSetupEvents();
+  syncMaxCardsControl(Number(elements.playerCount.value));
   renderPlayerInputs(Number(elements.playerCount.value));
   updateVoiceStatus(recognition ? "Voice status: idle" : "Speech recognition unavailable in this browser.");
   if (!recognition) {
@@ -93,7 +98,13 @@ function bindSetupEvents() {
   elements.playerCount.addEventListener("input", (event) => {
     const value = Number(event.target.value);
     elements.playerCountValue.textContent = String(value);
+    syncMaxCardsControl(value);
     renderPlayerInputs(value);
+  });
+
+  elements.maxCards.addEventListener("input", (event) => {
+    state.selectedStartCards = Number(event.target.value);
+    elements.maxCardsValue.textContent = String(state.selectedStartCards);
   });
 
   elements.randomizeNamesBtn.addEventListener("click", randomizeNames);
@@ -136,6 +147,7 @@ function randomizeNames() {
 function startGameFromSetup() {
   const names = Array.from(elements.playerNamesContainer.querySelectorAll("input")).map((input, index) => input.value.trim() || `Player ${index + 1}`);
   const playerCount = names.length;
+  const selectedStartCards = Number(elements.maxCards.value);
 
   state.players = names.map((name, index) => ({
     id: index + 1,
@@ -146,7 +158,8 @@ function startGameFromSetup() {
     history: [],
   }));
 
-  state.rounds = buildRounds(playerCount);
+  state.selectedStartCards = selectedStartCards;
+  state.rounds = buildRounds(playerCount, selectedStartCards);
   state.currentRoundIndex = 0;
   state.phase = "bidding";
   state.roundHistory = [];
@@ -165,8 +178,9 @@ function startGameFromSetup() {
   renderGame();
 }
 
-function buildRounds(playerCount) {
-  const maxCards = Math.floor(52 / playerCount);
+function buildRounds(playerCount, preferredMaxCards) {
+  const deckMaxCards = Math.floor(52 / playerCount);
+  const maxCards = Math.max(1, Math.min(deckMaxCards, preferredMaxCards || deckMaxCards));
   const descent = Array.from({ length: maxCards - 1 }, (_, index) => maxCards - index);
   const ascent = Array.from({ length: maxCards - 1 }, (_, index) => index + 2);
   const sequence = [...descent, 1, ...ascent];
@@ -186,19 +200,19 @@ function renderGame() {
   }
 
   state.players.forEach((player) => {
-    if (state.phase === "bidding" && player.currentBid === undefined) player.currentBid = null;
-    if (state.phase === "results" && player.currentTricks === undefined) player.currentTricks = null;
+    if (player.currentBid === undefined) player.currentBid = null;
+    if (player.currentTricks === undefined) player.currentTricks = null;
   });
 
   elements.roundLabel.textContent = `${round.roundNumber} / ${state.rounds.length}`;
   elements.cardsLabel.textContent = String(round.cards);
   elements.trumpLabel.textContent = `${round.trump.label} ${round.trump.glyph}`;
   elements.dealerLabel.textContent = state.players[round.dealerIndex].name;
-  elements.phaseTitle.textContent = state.phase === "bidding" ? "Enter bids" : "Enter tricks won";
+  elements.phaseTitle.textContent = state.phase === "bidding" ? "Enter bids" : "Score this round";
   elements.phaseSubtitle.textContent =
     state.phase === "bidding"
-      ? `Bidding order ends with ${state.players[round.dealerIndex].name}, who is under the hook rule.`
-      : `Actual tricks must sum to ${round.cards} before this round can score.`;
+      ? `Enter bids first. Tricks stay on the sheet and unlock once bids are confirmed. Dealer is ${state.players[round.dealerIndex].name}.`
+      : `Bids stay visible while you enter tricks. Actual tricks must sum to ${round.cards} before this round can score.`;
   elements.continueBtn.textContent = state.phase === "bidding" ? "Confirm Bids" : "Score Round";
 
   renderHookWarning();
@@ -224,19 +238,20 @@ function getBidOrder() {
 }
 
 function renderHookWarning() {
-  if (state.phase !== "bidding") {
+  const round = getCurrentRound();
+  if (!round) {
     elements.hookWarning.classList.add("hidden");
     return;
   }
-
-  const round = getCurrentRound();
   const dealerIndex = round.dealerIndex;
   const forbiddenBid = getForbiddenBid();
   const validRange = forbiddenBid >= 0 && forbiddenBid <= round.cards;
 
-  elements.hookWarning.textContent = validRange
-    ? `${state.players[dealerIndex].name} is dealer. Forbidden bid this round: ${forbiddenBid}.`
-    : `${state.players[dealerIndex].name} is dealer. No numeric bid is forbidden right now.`;
+  elements.hookWarning.textContent = state.phase === "bidding"
+    ? validRange
+      ? `${state.players[dealerIndex].name} is dealer. Forbidden bid this round: ${forbiddenBid}.`
+      : `${state.players[dealerIndex].name} is dealer. No numeric bid is forbidden right now.`
+    : `Scoring phase: bids are locked in. Tricks must total ${round.cards}.`;
   elements.hookWarning.classList.remove("hidden");
 }
 
@@ -253,8 +268,7 @@ function getForbiddenBid() {
 
 function renderEntryTable() {
   const round = getCurrentRound();
-  const order = state.phase === "bidding" ? getBidOrder() : state.players.map((_, index) => index);
-  const fieldKey = state.phase === "bidding" ? "currentBid" : "currentTricks";
+  const order = getBidOrder();
   const maxValue = round.cards;
   const forbiddenBid = getForbiddenBid();
 
@@ -268,7 +282,7 @@ function renderEntryTable() {
     row.className = `player-entry card-block ${isActiveVoice ? "active-voice" : ""}`;
 
     const wrapper = document.createElement("div");
-    wrapper.className = "grid gap-4 md:grid-cols-[1.4fr_0.9fr_auto]";
+    wrapper.className = "grid gap-4 lg:grid-cols-[1.2fr_0.8fr_0.8fr_auto]";
 
     const identity = document.createElement("div");
     identity.className = "flex items-center gap-3";
@@ -281,32 +295,28 @@ function renderEntryTable() {
           <span class="text-base font-semibold text-white">${escapeHtml(player.name)}</span>
           ${isDealer ? '<span class="dealer-badge">D</span>' : ""}
         </div>
-        <p class="text-sm text-stone-400">${
-          state.phase === "bidding"
-            ? isDealer && forbiddenBid !== null && forbiddenBid >= 0 && forbiddenBid <= round.cards
-              ? `Enter predicted tricks. Forbidden bid: ${forbiddenBid}.`
-              : "Enter predicted tricks"
-            : "Enter actual tricks won"
-        }</p>
+        <p class="text-sm text-stone-400">${getEntryHint(isDealer, forbiddenBid, round.cards)}</p>
       </div>
     `;
 
-    const inputWrap = document.createElement("div");
-    inputWrap.className = "flex items-center gap-3";
+    const bidWrap = document.createElement("div");
+    bidWrap.className = "space-y-2";
+    bidWrap.innerHTML = '<label class="block text-xs font-semibold uppercase tracking-[0.22em] text-stone-400">Bid</label>';
+    const bidInput = createNumberInput(playerIndex, "currentBid", player.currentBid, maxValue, false);
+    bidInput.disabled = state.phase === "results";
+    if (bidInput.disabled) {
+      bidInput.classList.add("opacity-80");
+    }
+    bidWrap.appendChild(bidInput);
 
-    const input = document.createElement("input");
-    input.type = "number";
-    input.min = "0";
-    input.max = String(maxValue);
-    input.step = "1";
-    input.value = player[fieldKey] ?? "";
-    input.className =
-      "w-full rounded-2xl border border-white/10 bg-stone-950/50 px-4 py-3 text-lg font-semibold text-white outline-none transition focus:border-amber-300/60";
-    input.dataset.playerIndex = String(playerIndex);
-    input.dataset.field = fieldKey;
-    input.addEventListener("input", handleNumericInput);
-
-    inputWrap.appendChild(input);
+    const tricksWrap = document.createElement("div");
+    tricksWrap.className = "space-y-2";
+    tricksWrap.innerHTML = '<label class="block text-xs font-semibold uppercase tracking-[0.22em] text-stone-400">Tricks Won</label>';
+    const tricksInput = createNumberInput(playerIndex, "currentTricks", player.currentTricks, maxValue, state.phase === "bidding");
+    if (tricksInput.disabled) {
+      tricksInput.placeholder = "Unlocks after bids";
+    }
+    tricksWrap.appendChild(tricksInput);
 
     const voiceButton = document.createElement("button");
     voiceButton.type = "button";
@@ -316,10 +326,36 @@ function renderEntryTable() {
     voiceButton.disabled = !recognition;
     voiceButton.addEventListener("click", () => beginVoiceCapture(playerIndex));
 
-    wrapper.append(identity, inputWrap, voiceButton);
+    wrapper.append(identity, bidWrap, tricksWrap, voiceButton);
     row.appendChild(wrapper);
     elements.entryTable.appendChild(row);
   });
+}
+
+function createNumberInput(playerIndex, field, value, maxValue, disabled) {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.max = String(maxValue);
+  input.step = "1";
+  input.value = value ?? "";
+  input.disabled = disabled;
+  input.className =
+    "w-full rounded-2xl border border-white/10 bg-stone-950/50 px-4 py-3 text-lg font-semibold text-white outline-none transition focus:border-amber-300/60 disabled:cursor-not-allowed disabled:opacity-50";
+  input.dataset.playerIndex = String(playerIndex);
+  input.dataset.field = field;
+  input.addEventListener("input", handleNumericInput);
+  return input;
+}
+
+function getEntryHint(isDealer, forbiddenBid, cards) {
+  if (state.phase === "bidding") {
+    if (isDealer && forbiddenBid !== null && forbiddenBid >= 0 && forbiddenBid <= cards) {
+      return `Enter predicted tricks. Forbidden bid: ${forbiddenBid}.`;
+    }
+    return "Enter predicted tricks first. Tricks unlock after bid confirmation.";
+  }
+  return "Bids are locked. Enter the actual tricks won.";
 }
 
 function handleNumericInput(event) {
@@ -363,6 +399,7 @@ function submitBids() {
 
   state.phase = "results";
   state.voiceTarget = null;
+  state.pendingTargetIndex = null;
   renderGame();
   if (state.conversationalMode) {
     startConversationalSequence();
@@ -476,6 +513,7 @@ function resetCurrentPhaseEntries() {
   if (state.phase === "bidding") {
     state.players.forEach((player) => {
       player.currentBid = null;
+      player.currentTricks = null;
     });
   } else {
     state.players.forEach((player) => {
@@ -760,11 +798,23 @@ function resetToSetup() {
   state.rounds = [];
   state.currentRoundIndex = 0;
   state.phase = "setup";
+  syncMaxCardsControl(Number(elements.playerCount.value));
   state.roundHistory = [];
   state.finalReason = "";
   state.voicePermissionDenied = false;
   state.voiceOptions = {};
   state.voiceOutcome = "idle";
+}
+
+function syncMaxCardsControl(playerCount) {
+  const allowedMax = Math.floor(52 / playerCount);
+  const currentValue = Number(elements.maxCards.value || allowedMax);
+  const nextValue = Math.min(Math.max(1, currentValue), allowedMax);
+  elements.maxCards.max = String(allowedMax);
+  elements.maxCards.value = String(nextValue);
+  elements.maxCardsValue.textContent = String(nextValue);
+  elements.maxCardsHint.textContent = `Default max for ${playerCount} players is ${allowedMax} cards.`;
+  state.selectedStartCards = nextValue;
 }
 
 function escapeHtml(value) {
