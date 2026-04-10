@@ -137,7 +137,7 @@ function renderPlayerInputs(count) {
 }
 
 function randomizeNames() {
-  const ideas = ["Aarav", "Mira", "Kabir", "Ira", "Rohan", "Zoya", "Neil", "Tara"];
+  const ideas = ["Amyra", "Alay", "Shanay", "Apeksha"];
   const shuffled = [...ideas].sort(() => Math.random() - 0.5);
   Array.from(elements.playerNamesContainer.querySelectorAll("input")).forEach((input, index) => {
     input.value = shuffled[index] || `Player ${index + 1}`;
