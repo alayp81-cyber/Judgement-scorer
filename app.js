@@ -34,6 +34,8 @@ const state = {
   currentRoundIndex: 0,
   phase: "setup",
   selectedStartCards: 13,
+  nextDealerPlayerId: null,
+  managingPlayers: false,
   conversationalMode: false,
   voiceTarget: null,
   pendingTargetIndex: null,
@@ -42,6 +44,7 @@ const state = {
   voiceOptions: {},
   voicePermissionDenied: false,
   roundHistory: [],
+  lastCompletedRound: null,
   finalReason: "",
 };
 
@@ -65,6 +68,14 @@ const elements = {
   phaseSubtitle: document.getElementById("phaseSubtitle"),
   hookWarning: document.getElementById("hookWarning"),
   voiceStatus: document.getElementById("voiceStatus"),
+  betweenRoundsPanel: document.getElementById("betweenRoundsPanel"),
+  betweenRoundsMessage: document.getElementById("betweenRoundsMessage"),
+  removePlayersPanel: document.getElementById("removePlayersPanel"),
+  removePlayersList: document.getElementById("removePlayersList"),
+  nextRoundBtn: document.getElementById("nextRoundBtn"),
+  managePlayersBtn: document.getElementById("managePlayersBtn"),
+  confirmRemovePlayersBtn: document.getElementById("confirmRemovePlayersBtn"),
+  cancelRemovePlayersBtn: document.getElementById("cancelRemovePlayersBtn"),
   entryTable: document.getElementById("entryTable"),
   continueBtn: document.getElementById("continueBtn"),
   resetRoundBtn: document.getElementById("resetRoundBtn"),
@@ -111,6 +122,10 @@ function bindSetupEvents() {
   elements.startGameBtn.addEventListener("click", startGameFromSetup);
   elements.continueBtn.addEventListener("click", handleContinue);
   elements.resetRoundBtn.addEventListener("click", resetCurrentPhaseEntries);
+  elements.nextRoundBtn.addEventListener("click", advanceToNextRound);
+  elements.managePlayersBtn.addEventListener("click", openRemovePlayersPanel);
+  elements.confirmRemovePlayersBtn.addEventListener("click", confirmPlayerRemoval);
+  elements.cancelRemovePlayersBtn.addEventListener("click", closeRemovePlayersPanel);
   elements.toggleConversationalBtn.addEventListener("click", toggleConversationalMode);
   elements.finishEarlyBtn.addEventListener("click", () => finishGame("Ended early by table choice."));
   elements.playAgainBtn.addEventListener("click", resetToSetup);
@@ -152,6 +167,8 @@ function startGameFromSetup() {
   state.players = names.map((name, index) => ({
     id: index + 1,
     name,
+    active: true,
+    leftAfterRound: null,
     totalScore: 0,
     currentBid: null,
     currentTricks: null,
@@ -161,8 +178,11 @@ function startGameFromSetup() {
   state.selectedStartCards = selectedStartCards;
   state.rounds = buildRounds(playerCount, selectedStartCards);
   state.currentRoundIndex = 0;
+  state.nextDealerPlayerId = state.players[0]?.id ?? null;
   state.phase = "bidding";
+  state.managingPlayers = false;
   state.roundHistory = [];
+  state.lastCompletedRound = null;
   state.finalReason = "";
   state.conversationalMode = false;
   state.voiceTarget = null;
@@ -182,17 +202,24 @@ function buildRounds(playerCount, preferredMaxCards) {
   const deckMaxCards = Math.floor(52 / playerCount);
   const maxCards = Math.max(1, Math.min(deckMaxCards, preferredMaxCards || deckMaxCards));
   const descent = Array.from({ length: maxCards - 1 }, (_, index) => maxCards - index);
-  const ascent = Array.from({ length: maxCards - 1 }, (_, index) => index + 2);
+  const ascent = Array.from({ length: maxCards }, (_, index) => index + 1);
   const sequence = [...descent, 1, ...ascent];
   return sequence.map((cards, index) => ({
     roundNumber: index + 1,
     cards,
     trump: trumpCycle[index % trumpCycle.length],
-    dealerIndex: index % playerCount,
+    dealerPlayerId: ((index % playerCount) + 1),
   }));
 }
 
 function renderGame() {
+  if (state.phase === "between-rounds") {
+    renderBetweenRounds();
+    renderScoreboard();
+    renderHistory();
+    return;
+  }
+
   const round = getCurrentRound();
   if (!round) {
     finishGame("Completed full round ladder.");
@@ -207,13 +234,17 @@ function renderGame() {
   elements.roundLabel.textContent = `${round.roundNumber} / ${state.rounds.length}`;
   elements.cardsLabel.textContent = String(round.cards);
   elements.trumpLabel.textContent = `${round.trump.label} ${round.trump.glyph}`;
-  elements.dealerLabel.textContent = state.players[round.dealerIndex].name;
+  const dealer = getRoundDealer(round);
+  elements.dealerLabel.textContent = dealer?.name || "-";
   elements.phaseTitle.textContent = state.phase === "bidding" ? "Enter bids" : "Score this round";
   elements.phaseSubtitle.textContent =
     state.phase === "bidding"
-      ? `Enter bids first. Tricks stay on the sheet and unlock once bids are confirmed. Dealer is ${state.players[round.dealerIndex].name}.`
+      ? `Enter bids first. Tricks stay on the sheet and unlock once bids are confirmed. Dealer is ${dealer?.name || "-"}.`
       : `Bids stay visible while you enter tricks. Actual tricks must sum to ${round.cards} before this round can score.`;
   elements.continueBtn.textContent = state.phase === "bidding" ? "Confirm Bids" : "Score Round";
+  elements.betweenRoundsPanel.classList.add("hidden");
+  elements.continueBtn.classList.remove("hidden");
+  elements.resetRoundBtn.classList.remove("hidden");
 
   renderHookWarning();
   renderEntryTable();
@@ -225,14 +256,37 @@ function getCurrentRound() {
   return state.rounds[state.currentRoundIndex] || null;
 }
 
+function getActivePlayers() {
+  return state.players.filter((player) => player.active);
+}
+
+function getRoundDealer(round = getCurrentRound()) {
+  if (!round) return null;
+  const activePlayers = getActivePlayers();
+  if (!activePlayers.length) return null;
+  const dealer = state.players.find((player) => player.id === round.dealerPlayerId && player.active);
+  return dealer || activePlayers[0];
+}
+
+function getNextActivePlayerId(afterPlayerId) {
+  const activePlayers = getActivePlayers();
+  if (!activePlayers.length) return null;
+  if (afterPlayerId == null) return activePlayers[0].id;
+  const currentIndex = activePlayers.findIndex((player) => player.id === afterPlayerId);
+  if (currentIndex === -1) return activePlayers[0].id;
+  return activePlayers[(currentIndex + 1) % activePlayers.length].id;
+}
+
 function getBidOrder() {
   const round = getCurrentRound();
   const order = [];
-  const totalPlayers = state.players.length;
-  const firstBidder = (round.dealerIndex + 1) % totalPlayers;
+  const activePlayers = getActivePlayers();
+  const dealer = getRoundDealer(round);
+  const dealerIndex = activePlayers.findIndex((player) => player.id === dealer?.id);
+  const firstBidder = activePlayers.length ? (dealerIndex + 1) % activePlayers.length : 0;
 
-  for (let offset = 0; offset < totalPlayers; offset += 1) {
-    order.push((firstBidder + offset) % totalPlayers);
+  for (let offset = 0; offset < activePlayers.length; offset += 1) {
+    order.push(activePlayers[(firstBidder + offset) % activePlayers.length].id);
   }
   return order;
 }
@@ -243,14 +297,14 @@ function renderHookWarning() {
     elements.hookWarning.classList.add("hidden");
     return;
   }
-  const dealerIndex = round.dealerIndex;
+  const dealer = getRoundDealer(round);
   const forbiddenBid = getForbiddenBid();
   const validRange = forbiddenBid >= 0 && forbiddenBid <= round.cards;
 
   elements.hookWarning.textContent = state.phase === "bidding"
     ? validRange
-      ? `${state.players[dealerIndex].name} is dealer. Forbidden bid this round: ${forbiddenBid}.`
-      : `${state.players[dealerIndex].name} is dealer. No numeric bid is forbidden right now.`
+      ? `${dealer?.name || "Dealer"} is dealer. Forbidden bid this round: ${forbiddenBid}.`
+      : `${dealer?.name || "Dealer"} is dealer. No numeric bid is forbidden right now.`
     : `Scoring phase: bids are locked in. Tricks must total ${round.cards}.`;
   elements.hookWarning.classList.remove("hidden");
 }
@@ -259,10 +313,10 @@ function getForbiddenBid() {
   if (state.phase !== "bidding") return null;
   const round = getCurrentRound();
   const order = getBidOrder();
-  const dealerIndex = round.dealerIndex;
-  const dealerPosition = order.indexOf(dealerIndex);
+  const dealer = getRoundDealer(round);
+  const dealerPosition = order.indexOf(dealer?.id);
   const precedingPlayers = order.slice(0, dealerPosition);
-  const enteredTotal = precedingPlayers.reduce((sum, playerIndex) => sum + (Number(state.players[playerIndex].currentBid) || 0), 0);
+  const enteredTotal = precedingPlayers.reduce((sum, playerId) => sum + (Number(findPlayerById(playerId)?.currentBid) || 0), 0);
   return round.cards - enteredTotal;
 }
 
@@ -275,8 +329,9 @@ function renderEntryTable() {
   elements.entryTable.innerHTML = "";
 
   order.forEach((playerIndex, position) => {
-    const player = state.players[playerIndex];
-    const isDealer = round.dealerIndex === playerIndex;
+    const player = findPlayerById(playerIndex);
+    const dealer = getRoundDealer(round);
+    const isDealer = dealer?.id === playerIndex;
     const isActiveVoice = state.voiceTarget === playerIndex;
     const row = document.createElement("div");
     row.className = `player-entry card-block ${isActiveVoice ? "active-voice" : ""}`;
@@ -366,11 +421,11 @@ function handleNumericInput(event) {
 
   if (numericValue !== null && (numericValue < 0 || numericValue > round.cards)) {
     event.target.value = "";
-    state.players[playerIndex][field] = null;
+    findPlayerById(playerIndex)[field] = null;
     return;
   }
 
-  state.players[playerIndex][field] = numericValue;
+  findPlayerById(playerIndex)[field] = numericValue;
   if (state.phase === "bidding") renderHookWarning();
 }
 
@@ -384,16 +439,17 @@ function handleContinue() {
 
 function submitBids() {
   const round = getCurrentRound();
-  const incomplete = state.players.find((player) => player.currentBid === null || player.currentBid === "");
+  const activePlayers = getActivePlayers();
+  const incomplete = activePlayers.find((player) => player.currentBid === null || player.currentBid === "");
   if (incomplete) {
     window.alert("Enter a bid for every player before continuing.");
     return;
   }
 
-  const dealerIndex = round.dealerIndex;
-  const totalBid = state.players.reduce((sum, player) => sum + Number(player.currentBid), 0);
+  const dealer = getRoundDealer(round);
+  const totalBid = activePlayers.reduce((sum, player) => sum + Number(player.currentBid), 0);
   if (totalBid === round.cards) {
-    window.alert(`${state.players[dealerIndex].name} cannot make the total bids equal ${round.cards}.`);
+    window.alert(`${dealer?.name || "Dealer"} cannot make the total bids equal ${round.cards}.`);
     return;
   }
 
@@ -408,13 +464,14 @@ function submitBids() {
 
 function submitResults() {
   const round = getCurrentRound();
-  const incomplete = state.players.find((player) => player.currentTricks === null || player.currentTricks === "");
+  const activePlayers = getActivePlayers();
+  const incomplete = activePlayers.find((player) => player.currentTricks === null || player.currentTricks === "");
   if (incomplete) {
     window.alert("Enter tricks won for every player before scoring the round.");
     return;
   }
 
-  const totalTricks = state.players.reduce((sum, player) => sum + Number(player.currentTricks), 0);
+  const totalTricks = activePlayers.reduce((sum, player) => sum + Number(player.currentTricks), 0);
   if (totalTricks !== round.cards) {
     window.alert(`Actual tricks must total ${round.cards}. Current total is ${totalTricks}.`);
     return;
@@ -427,7 +484,7 @@ function submitResults() {
     players: [],
   };
 
-  state.players.forEach((player) => {
+  activePlayers.forEach((player) => {
     const bid = Number(player.currentBid);
     const tricks = Number(player.currentTricks);
     const roundScore = bid === tricks ? 10 + bid : 0;
@@ -438,26 +495,25 @@ function submitResults() {
     player.currentTricks = null;
   });
 
+  state.players
+    .filter((player) => !player.active)
+    .forEach((player) => {
+      player.currentBid = null;
+      player.currentTricks = null;
+    });
+
   state.roundHistory.unshift(summary);
-  state.currentRoundIndex += 1;
-  state.phase = "bidding";
+  state.lastCompletedRound = round;
+  state.phase = "between-rounds";
   state.voiceTarget = null;
   state.pendingTargetIndex = null;
+  state.managingPlayers = false;
   stopVoiceCapture({ clearPending: true, updateStatus: false });
-
-  if (state.currentRoundIndex >= state.rounds.length) {
-    finishGame("Completed the full Judgement ladder.");
-    return;
-  }
-
   renderGame();
-  if (state.conversationalMode) {
-    startConversationalSequence();
-  }
 }
 
 function renderScoreboard() {
-  const ranked = [...state.players].sort((a, b) => b.totalScore - a.totalScore || a.name.localeCompare(b.name));
+  const ranked = [...getActivePlayers()].sort((a, b) => b.totalScore - a.totalScore || a.name.localeCompare(b.name));
   elements.scoreboardBody.innerHTML = "";
 
   ranked.forEach((player, index) => {
@@ -511,12 +567,12 @@ function renderHistory() {
 
 function resetCurrentPhaseEntries() {
   if (state.phase === "bidding") {
-    state.players.forEach((player) => {
+    getActivePlayers().forEach((player) => {
       player.currentBid = null;
       player.currentTricks = null;
     });
   } else {
-    state.players.forEach((player) => {
+    getActivePlayers().forEach((player) => {
       player.currentTricks = null;
     });
   }
@@ -554,9 +610,10 @@ function startConversationalSequence() {
     return;
   }
 
-  const sequence = state.phase === "bidding" ? getBidOrder() : state.players.map((_, index) => index);
+  const sequence = state.phase === "bidding" ? getBidOrder() : getActivePlayers().map((player) => player.id);
   const next = sequence.find((playerIndex) => {
-    const field = state.phase === "bidding" ? state.players[playerIndex].currentBid : state.players[playerIndex].currentTricks;
+    const player = findPlayerById(playerIndex);
+    const field = state.phase === "bidding" ? player?.currentBid : player?.currentTricks;
     return field === null || field === "";
   });
 
@@ -580,7 +637,7 @@ function beginVoiceCapture(playerIndex, options = {}) {
 }
 
 function launchRecognition(playerIndex, options = {}) {
-  const player = state.players[playerIndex];
+  const player = findPlayerById(playerIndex);
   state.voiceOptions = options;
   state.voiceOutcome = "pending";
   state.voiceTarget = playerIndex;
@@ -664,13 +721,13 @@ function createRecognition() {
     }
 
     if (state.phase === "bidding") {
-      state.players[targetIndex].currentBid = parsedNumber;
+      findPlayerById(targetIndex).currentBid = parsedNumber;
     } else {
-      state.players[targetIndex].currentTricks = parsedNumber;
+      findPlayerById(targetIndex).currentTricks = parsedNumber;
     }
 
     state.voiceOutcome = "success";
-    updateVoiceStatus(`${state.players[targetIndex].name}: recorded ${parsedNumber}.`);
+    updateVoiceStatus(`${findPlayerById(targetIndex).name}: recorded ${parsedNumber}.`);
     renderGame();
   };
 
@@ -739,7 +796,7 @@ function speakPromptForPlayer(playerIndex, onComplete) {
   }
   synth.cancel();
   const round = getCurrentRound();
-  const player = state.players[playerIndex];
+  const player = findPlayerById(playerIndex);
   const field = state.phase === "bidding" ? "bid" : "tricks won";
   const utterance = new SpeechSynthesisUtterance(
     `${player.name}, say your ${field} for ${round.cards} cards.`
@@ -778,6 +835,7 @@ function finishGame(reason) {
         <div>
           <div class="text-xs uppercase tracking-[0.24em] text-stone-400">${index + 1}${ordinalSuffix(index + 1)} place</div>
           <div class="mt-1 text-xl font-semibold text-white">${escapeHtml(player.name)}</div>
+          ${player.leftAfterRound ? `<div class="mt-1 text-sm text-stone-400">Left after round ${player.leftAfterRound}</div>` : ""}
         </div>
         <div class="text-right">
           <div class="font-display text-3xl font-bold text-amber-200">${player.totalScore}</div>
@@ -799,11 +857,122 @@ function resetToSetup() {
   state.currentRoundIndex = 0;
   state.phase = "setup";
   syncMaxCardsControl(Number(elements.playerCount.value));
+  state.nextDealerPlayerId = null;
+  state.managingPlayers = false;
   state.roundHistory = [];
+  state.lastCompletedRound = null;
   state.finalReason = "";
   state.voicePermissionDenied = false;
   state.voiceOptions = {};
   state.voiceOutcome = "idle";
+}
+
+function renderBetweenRounds() {
+  const round = state.lastCompletedRound;
+  if (!round) return;
+  const dealer = getRoundDealer(round);
+  elements.roundLabel.textContent = `${round.roundNumber} / ${state.rounds.length}`;
+  elements.cardsLabel.textContent = String(round.cards);
+  elements.trumpLabel.textContent = `${round.trump.label} ${round.trump.glyph}`;
+  elements.dealerLabel.textContent = dealer?.name || "-";
+  elements.phaseTitle.textContent = "Round complete";
+  elements.phaseSubtitle.textContent = "Continue with the same table, or remove players before the next round begins.";
+  elements.hookWarning.classList.add("hidden");
+  elements.entryTable.innerHTML = "";
+  elements.continueBtn.classList.add("hidden");
+  elements.resetRoundBtn.classList.add("hidden");
+  elements.betweenRoundsPanel.classList.remove("hidden");
+  elements.betweenRoundsMessage.textContent = `Round ${round.roundNumber} has been scored. Active players remaining: ${getActivePlayers().length}.`;
+  renderRemovePlayersPanel();
+}
+
+function renderRemovePlayersPanel() {
+  elements.removePlayersList.innerHTML = "";
+  const activePlayers = getActivePlayers();
+  activePlayers.forEach((player) => {
+    const label = document.createElement("label");
+    label.className = "flex items-center gap-3 rounded-2xl border border-white/10 px-3 py-3 text-sm text-stone-200";
+    label.innerHTML = `
+      <input type="checkbox" class="h-4 w-4 accent-rose-400" value="${player.id}" />
+      <span>${escapeHtml(player.name)}</span>
+    `;
+    elements.removePlayersList.appendChild(label);
+  });
+
+  elements.removePlayersPanel.classList.toggle("hidden", !state.managingPlayers);
+  elements.confirmRemovePlayersBtn.classList.toggle("hidden", !state.managingPlayers);
+  elements.cancelRemovePlayersBtn.classList.toggle("hidden", !state.managingPlayers);
+  elements.managePlayersBtn.classList.toggle("hidden", state.managingPlayers);
+}
+
+function openRemovePlayersPanel() {
+  state.managingPlayers = true;
+  renderRemovePlayersPanel();
+}
+
+function closeRemovePlayersPanel() {
+  state.managingPlayers = false;
+  renderRemovePlayersPanel();
+}
+
+function confirmPlayerRemoval() {
+  const leavingIds = Array.from(elements.removePlayersList.querySelectorAll('input[type="checkbox"]:checked')).map((input) => Number(input.value));
+  if (!leavingIds.length) {
+    window.alert("Select at least one player to remove.");
+    return;
+  }
+
+  const roundNumber = state.lastCompletedRound?.roundNumber ?? state.currentRoundIndex;
+  state.players.forEach((player) => {
+    if (leavingIds.includes(player.id)) {
+      player.active = false;
+      player.leftAfterRound = roundNumber;
+      player.currentBid = null;
+      player.currentTricks = null;
+    }
+  });
+
+  state.managingPlayers = false;
+
+  if (getActivePlayers().length < 4) {
+    const shouldEnd = window.confirm("Fewer than 4 active players remain. End the game early?");
+    if (shouldEnd) {
+      finishGame("Ended early because fewer than 4 active players remained.");
+      return;
+    }
+    renderBetweenRounds();
+    return;
+  }
+
+  advanceToNextRound();
+}
+
+function advanceToNextRound() {
+  if (state.currentRoundIndex >= state.rounds.length - 1) {
+    finishGame("Completed the full Judgement ladder.");
+    return;
+  }
+
+  const completedDealer = getRoundDealer(state.lastCompletedRound);
+  state.nextDealerPlayerId = getNextActivePlayerId(completedDealer?.id);
+  state.currentRoundIndex += 1;
+  const nextRound = getCurrentRound();
+  if (nextRound) {
+    nextRound.dealerPlayerId = state.nextDealerPlayerId;
+  }
+  state.phase = "bidding";
+  state.managingPlayers = false;
+  elements.betweenRoundsPanel.classList.add("hidden");
+  elements.continueBtn.classList.remove("hidden");
+  elements.resetRoundBtn.classList.remove("hidden");
+  renderGame();
+  if (state.conversationalMode) {
+    startConversationalSequence();
+  }
+}
+
+function findPlayerById(playerId) {
+  return state.players.find((player) => player.id === playerId) || null;
 }
 
 function syncMaxCardsControl(playerCount) {
