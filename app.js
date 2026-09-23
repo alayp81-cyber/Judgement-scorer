@@ -5,10 +5,7 @@ const trumpCycle = [
   { key: "hearts", label: "Hearts", glyph: "♥", local: "Lal" },
 ];
 
-const noTrumpCycle = [
-  ...trumpCycle,
-  { key: "no-trump", label: "No Trump", glyph: "", local: "No Trump" },
-];
+const noTrump = { key: "no-trump", label: "No Trump", glyph: "", local: "No Trump" };
 
 const spokenNumberMap = {
   zero: 0,
@@ -39,6 +36,7 @@ const state = {
   currentRoundIndex: 0,
   phase: "setup",
   selectedStartCards: 13,
+  gameplayMode: "default",
   nextDealerPlayerId: null,
   managingPlayers: false,
   conversationalMode: false,
@@ -64,6 +62,9 @@ const elements = {
   maxCardsValue: document.getElementById("maxCardsValue"),
   maxCardsHint: document.getElementById("maxCardsHint"),
   gameplayMode: document.getElementById("gameplayMode"),
+  roundTrumpPanel: document.getElementById("roundTrumpPanel"),
+  roundTrumpChoice: document.getElementById("roundTrumpChoice"),
+  roundTrumpHint: document.getElementById("roundTrumpHint"),
   playerNamesContainer: document.getElementById("playerNamesContainer"),
   randomizeNamesBtn: document.getElementById("randomizeNamesBtn"),
   startGameBtn: document.getElementById("startGameBtn"),
@@ -126,6 +127,7 @@ function bindSetupEvents() {
   });
 
   elements.randomizeNamesBtn.addEventListener("click", randomizeNames);
+  elements.roundTrumpChoice.addEventListener("change", changeRoundTrump);
   elements.startGameBtn.addEventListener("click", startGameFromSetup);
   elements.continueBtn.addEventListener("click", handleContinue);
   elements.resetRoundBtn.addEventListener("click", resetCurrentPhaseEntries);
@@ -184,7 +186,8 @@ function startGameFromSetup() {
   }));
 
   state.selectedStartCards = selectedStartCards;
-  state.rounds = buildRounds(playerCount, selectedStartCards, elements.gameplayMode.value);
+  state.gameplayMode = elements.gameplayMode.value;
+  state.rounds = buildRounds(playerCount, selectedStartCards);
   state.currentRoundIndex = 0;
   state.nextDealerPlayerId = state.players[0]?.id ?? null;
   state.phase = "bidding";
@@ -206,8 +209,7 @@ function startGameFromSetup() {
   renderGame();
 }
 
-function buildRounds(playerCount, preferredMaxCards, gameplayMode = "default") {
-  const selectedTrumpCycle = gameplayMode === "no-trump" ? noTrumpCycle : trumpCycle;
+function buildRounds(playerCount, preferredMaxCards) {
   const deckMaxCards = Math.floor(52 / playerCount);
   const maxCards = Math.max(1, Math.min(deckMaxCards, preferredMaxCards || deckMaxCards));
   const descent = Array.from({ length: maxCards - 1 }, (_, index) => maxCards - index);
@@ -216,12 +218,52 @@ function buildRounds(playerCount, preferredMaxCards, gameplayMode = "default") {
   return sequence.map((cards, index) => ({
     roundNumber: index + 1,
     cards,
-    trump: selectedTrumpCycle[index % selectedTrumpCycle.length],
+    trump: trumpCycle[index % trumpCycle.length],
+    noTrump: false,
+    biddingStarted: false,
     dealerPlayerId: ((index % playerCount) + 1),
   }));
 }
 
+function refreshTrumpSchedule() {
+  let suitIndex = 0;
+  // A no-trump round does not consume a suit from the regular rotation.
+  state.rounds.forEach((round) => {
+    round.trump = round.noTrump ? noTrump : trumpCycle[suitIndex++ % trumpCycle.length];
+  });
+}
+
+function renderRoundTrumpControl() {
+  const round = getCurrentRound();
+  const visible = state.gameplayMode === "no-trump" && ["bidding", "results"].includes(state.phase);
+  elements.roundTrumpPanel.classList.toggle("hidden", !visible);
+  if (!visible || !round) return;
+  const previousSuitRounds = state.rounds.slice(0, state.currentRoundIndex).filter((entry) => !entry.noTrump).length;
+  const waitingSuit = trumpCycle[previousSuitRounds % trumpCycle.length];
+  elements.roundTrumpChoice.options[0].textContent = `Regular trump: ${waitingSuit.label}`;
+  elements.roundTrumpChoice.value = round.noTrump ? "no-trump" : "regular";
+  elements.roundTrumpChoice.disabled = state.phase !== "bidding" || round.biddingStarted;
+  const timing = elements.roundTrumpChoice.disabled ? "Locked for this round. Reset the round to change it." : "Choose before the first bid.";
+  elements.roundTrumpHint.textContent = round.noTrump
+    ? `${timing} Next regular trump: ${waitingSuit.label}.`
+    : `${timing} No Trump keeps ${waitingSuit.label} for the next regular round.`;
+}
+
+function changeRoundTrump() {
+  const round = getCurrentRound();
+  if (state.gameplayMode !== "no-trump" || state.phase !== "bidding" || !round || round.biddingStarted) {
+    renderRoundTrumpControl();
+    return;
+  }
+  stopVoiceCapture({ clearPending: true });
+  round.noTrump = elements.roundTrumpChoice.value === "no-trump";
+  refreshTrumpSchedule();
+  renderGame();
+  if (state.conversationalMode) startConversationalSequence();
+}
+
 function renderGame() {
+  renderRoundTrumpControl();
   if (state.phase === "between-rounds") {
     renderBetweenRounds();
     renderScoreboard();
@@ -474,6 +516,8 @@ function handleNumericInput(event) {
   }
 
   findPlayerById(playerIndex)[field] = numericValue;
+  if (field === "currentBid" && numericValue !== null) round.biddingStarted = true;
+  renderRoundTrumpControl();
   if (state.phase === "bidding") renderHookWarning();
   renderScoreboard();
 }
@@ -635,6 +679,7 @@ function resetCurrentPhaseEntries() {
     player.succeeded = null;
   });
   state.phase = "bidding";
+  getCurrentRound().biddingStarted = false;
   renderGame();
 }
 
@@ -800,6 +845,7 @@ function createRecognition() {
 
     if (state.phase === "bidding") {
       findPlayerById(targetIndex).currentBid = parsedNumber;
+      round.biddingStarted = true;
     } else {
       findPlayerById(targetIndex).currentTricks = parsedNumber;
       player.succeeded = parsedNumber === player.currentBid;

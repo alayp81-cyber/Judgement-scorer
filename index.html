@@ -89,7 +89,7 @@
                 <option value="default" selected>Default</option>
                 <option value="no-trump">No-Trump Gameplay</option>
               </select>
-              <p id="gameplayModeHint" class="mt-2 text-sm text-stone-400">Default repeats Spades, Diamonds, Clubs, Hearts. No-Trump Gameplay adds No Trump after Hearts, then repeats. The number of rounds stays the same.</p>
+              <p id="gameplayModeHint" class="mt-2 text-sm text-stone-400">Default repeats Spades, Diamonds, Clubs, Hearts. No-Trump Gameplay lets you choose any round as No Trump before bidding. The next regular round resumes with the waiting suit.</p>
             </div>
 
             <div class="card-block">
@@ -130,7 +130,7 @@
             </div>
             <div class="card-block">
               <h3 class="font-semibold text-white">Trump cycle</h3>
-              <p class="mt-2">Default: Spades, Diamonds, Clubs, Hearts. No-Trump Gameplay adds a fifth step, No Trump, before returning to Spades.</p>
+              <p class="mt-2">Spades, Diamonds, Clubs, Hearts. In No-Trump Gameplay, choose No Trump for any round to pause the suit rotation. The card ladder stays the same.</p>
             </div>
             <div class="card-block">
               <h3 class="font-semibold text-white">Scoring</h3>
@@ -197,6 +197,14 @@
                 </div>
               </div>
 
+              <div id="roundTrumpPanel" class="mb-4 hidden rounded-2xl border border-white/10 bg-white/5 p-4">
+                <label for="roundTrumpChoice" class="block text-sm font-medium text-stone-200">Trump for this round</label>
+                <select id="roundTrumpChoice" aria-describedby="roundTrumpHint" class="mt-2 w-full rounded-2xl border border-white/10 bg-stone-950 px-4 py-3 text-white disabled:opacity-60">
+                  <option value="regular">Regular trump</option>
+                  <option value="no-trump">No Trump</option>
+                </select>
+                <p id="roundTrumpHint" class="mt-2 text-sm text-stone-400"></p>
+              </div>
               <div id="hookWarning" class="mb-4 hidden rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-3 text-sm text-amber-100"></div>
               <div id="voiceStatus" class="mb-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-stone-300">
                 Voice status: idle
@@ -318,6 +326,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=no-trump-1"></script>
+    <script src="./app.js?v=no-trump-choice-2"></script>
   </body>
 </html>
