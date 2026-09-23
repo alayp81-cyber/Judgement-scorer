@@ -84,6 +84,15 @@
             </div>
 
             <div class="card-block">
+              <label for="gameplayMode" class="block text-sm font-medium text-stone-200">Gameplay</label>
+              <select id="gameplayMode" aria-describedby="gameplayModeHint" class="mt-3 w-full rounded-2xl border border-white/10 bg-stone-950 px-4 py-3 text-white">
+                <option value="default" selected>Default</option>
+                <option value="no-trump">No-Trump Gameplay</option>
+              </select>
+              <p id="gameplayModeHint" class="mt-2 text-sm text-stone-400">Default repeats Spades, Diamonds, Clubs, Hearts. No-Trump Gameplay adds No Trump after Hearts, then repeats. The number of rounds stays the same.</p>
+            </div>
+
+            <div class="card-block">
               <div class="mb-4 flex items-center justify-between gap-4">
                 <div>
                   <h3 class="text-lg font-semibold text-white">Player names</h3>
@@ -121,7 +130,7 @@
             </div>
             <div class="card-block">
               <h3 class="font-semibold text-white">Trump cycle</h3>
-              <p class="mt-2">Spades, Diamonds, Clubs, Hearts. Repeats every four rounds.</p>
+              <p class="mt-2">Default: Spades, Diamonds, Clubs, Hearts. No-Trump Gameplay adds a fifth step, No Trump, before returning to Spades.</p>
             </div>
             <div class="card-block">
               <h3 class="font-semibold text-white">Scoring</h3>
@@ -309,6 +318,6 @@
       </section>
     </main>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=no-trump-1"></script>
   </body>
 </html>

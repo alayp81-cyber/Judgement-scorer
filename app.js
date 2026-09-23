@@ -5,6 +5,11 @@ const trumpCycle = [
   { key: "hearts", label: "Hearts", glyph: "♥", local: "Lal" },
 ];
 
+const noTrumpCycle = [
+  ...trumpCycle,
+  { key: "no-trump", label: "No Trump", glyph: "", local: "No Trump" },
+];
+
 const spokenNumberMap = {
   zero: 0,
   none: 0,
@@ -58,6 +63,7 @@ const elements = {
   maxCards: document.getElementById("maxCards"),
   maxCardsValue: document.getElementById("maxCardsValue"),
   maxCardsHint: document.getElementById("maxCardsHint"),
+  gameplayMode: document.getElementById("gameplayMode"),
   playerNamesContainer: document.getElementById("playerNamesContainer"),
   randomizeNamesBtn: document.getElementById("randomizeNamesBtn"),
   startGameBtn: document.getElementById("startGameBtn"),
@@ -178,7 +184,7 @@ function startGameFromSetup() {
   }));
 
   state.selectedStartCards = selectedStartCards;
-  state.rounds = buildRounds(playerCount, selectedStartCards);
+  state.rounds = buildRounds(playerCount, selectedStartCards, elements.gameplayMode.value);
   state.currentRoundIndex = 0;
   state.nextDealerPlayerId = state.players[0]?.id ?? null;
   state.phase = "bidding";
@@ -200,7 +206,8 @@ function startGameFromSetup() {
   renderGame();
 }
 
-function buildRounds(playerCount, preferredMaxCards) {
+function buildRounds(playerCount, preferredMaxCards, gameplayMode = "default") {
+  const selectedTrumpCycle = gameplayMode === "no-trump" ? noTrumpCycle : trumpCycle;
   const deckMaxCards = Math.floor(52 / playerCount);
   const maxCards = Math.max(1, Math.min(deckMaxCards, preferredMaxCards || deckMaxCards));
   const descent = Array.from({ length: maxCards - 1 }, (_, index) => maxCards - index);
@@ -209,7 +216,7 @@ function buildRounds(playerCount, preferredMaxCards) {
   return sequence.map((cards, index) => ({
     roundNumber: index + 1,
     cards,
-    trump: trumpCycle[index % trumpCycle.length],
+    trump: selectedTrumpCycle[index % selectedTrumpCycle.length],
     dealerPlayerId: ((index % playerCount) + 1),
   }));
 }
