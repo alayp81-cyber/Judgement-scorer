@@ -42,6 +42,7 @@ const state = {
   recognitionActive: false,
   voiceOutcome: "idle",
   voiceOptions: {},
+  voiceGeneration: 0,
   voicePermissionDenied: false,
   roundHistory: [],
   lastCompletedRound: null,
@@ -172,6 +173,7 @@ function startGameFromSetup() {
     totalScore: 0,
     currentBid: null,
     currentTricks: null,
+    succeeded: null,
     history: [],
   }));
 
@@ -240,7 +242,7 @@ function renderGame() {
   elements.phaseSubtitle.textContent =
     state.phase === "bidding"
       ? `Enter bids first. Tricks stay on the sheet and unlock once bids are confirmed. Dealer is ${dealer?.name || "-"}.`
-      : `Bids stay visible while you enter tricks. Actual tricks must sum to ${round.cards} before this round can score.`;
+      : `Succeeded? Yes fills your bid; No lets you enter actual tricks. Tricks must total ${round.cards}.`;
   elements.continueBtn.textContent = state.phase === "bidding" ? "Confirm Bids" : "Score Round";
   elements.betweenRoundsPanel.classList.add("hidden");
   elements.continueBtn.classList.remove("hidden");
@@ -299,14 +301,19 @@ function renderHookWarning() {
   }
   const dealer = getRoundDealer(round);
   const forbiddenBid = getForbiddenBid();
-  const validRange = forbiddenBid >= 0 && forbiddenBid <= round.cards;
+  const validRange = forbiddenBid !== null && forbiddenBid >= 0 && forbiddenBid <= round.cards;
 
   elements.hookWarning.textContent = state.phase === "bidding"
-    ? validRange
+    ? forbiddenBid === null
+      ? "Enter all other players' bids to calculate the dealer's forbidden bid."
+      : validRange
       ? `${dealer?.name || "Dealer"} is dealer. Forbidden bid this round: ${forbiddenBid}.`
       : `${dealer?.name || "Dealer"} is dealer. No numeric bid is forbidden right now.`
     : `Scoring phase: bids are locked in. Tricks must total ${round.cards}.`;
   elements.hookWarning.classList.remove("hidden");
+  elements.entryTable.querySelectorAll("[data-entry-hint]").forEach((hint) => {
+    hint.textContent = getEntryHint(Number(hint.dataset.entryHint) === dealer?.id, forbiddenBid, round.cards);
+  });
 }
 
 function getForbiddenBid() {
@@ -316,11 +323,21 @@ function getForbiddenBid() {
   const dealer = getRoundDealer(round);
   const dealerPosition = order.indexOf(dealer?.id);
   const precedingPlayers = order.slice(0, dealerPosition);
-  const enteredTotal = precedingPlayers.reduce((sum, playerId) => sum + (Number(findPlayerById(playerId)?.currentBid) || 0), 0);
+  const bids = precedingPlayers.map((playerId) => findPlayerById(playerId)?.currentBid);
+  if (bids.some((bid) => !isValidTrickCount(bid, round.cards))) return null;
+  const enteredTotal = bids.reduce((sum, bid) => sum + bid, 0);
   return round.cards - enteredTotal;
 }
 
+function isValidTrickCount(value, cards) {
+  return Number.isInteger(value) && value >= 0 && value <= cards;
+}
+
 function renderEntryTable() {
+  if (!["bidding", "results"].includes(state.phase)) {
+    elements.entryTable.innerHTML = "";
+    return;
+  }
   const round = getCurrentRound();
   const order = getBidOrder();
   const maxValue = round.cards;
@@ -350,7 +367,7 @@ function renderEntryTable() {
           <span class="text-base font-semibold text-white">${escapeHtml(player.name)}</span>
           ${isDealer ? '<span class="dealer-badge">D</span>' : ""}
         </div>
-        <p class="text-sm text-stone-400">${getEntryHint(isDealer, forbiddenBid, round.cards)}</p>
+        <p data-entry-hint="${player.id}" class="text-sm text-stone-400">${getEntryHint(isDealer, forbiddenBid, round.cards)}</p>
       </div>
     `;
 
@@ -366,12 +383,32 @@ function renderEntryTable() {
 
     const tricksWrap = document.createElement("div");
     tricksWrap.className = "space-y-2";
-    tricksWrap.innerHTML = '<label class="block text-xs font-semibold uppercase tracking-[0.22em] text-stone-400">Tricks Won</label>';
-    const tricksInput = createNumberInput(playerIndex, "currentTricks", player.currentTricks, maxValue, state.phase === "bidding");
-    if (tricksInput.disabled) {
-      tricksInput.placeholder = "Unlocks after bids";
+    tricksWrap.innerHTML = `<label for="succeeded-${player.id}" class="block text-xs font-semibold uppercase tracking-[0.12em] text-stone-400">Succeeded?</label>`;
+    const successSelect = document.createElement("select");
+    successSelect.id = `succeeded-${player.id}`;
+    successSelect.setAttribute("aria-label", `${player.name}: succeeded?`);
+    successSelect.className = "w-full rounded-2xl border border-white/10 bg-stone-950 px-3 py-3 text-white disabled:opacity-50";
+    successSelect.innerHTML = '<option value="">Choose...</option><option value="yes">Yes</option><option value="no">No</option>';
+    successSelect.value = player.succeeded === null ? "" : player.succeeded ? "yes" : "no";
+    successSelect.disabled = state.phase !== "results";
+    successSelect.addEventListener("change", () => {
+      if (state.phase !== "results") return;
+      stopVoiceCapture({ clearPending: true });
+      player.succeeded = successSelect.value === "" ? null : successSelect.value === "yes";
+      player.currentTricks = player.succeeded === true ? player.currentBid : null;
+      renderGame();
+    });
+    tricksWrap.appendChild(successSelect);
+    if (player.succeeded === false) {
+      const tricksInput = createNumberInput(playerIndex, "currentTricks", player.currentTricks, maxValue, false);
+      tricksInput.placeholder = "Actual tricks";
+      tricksWrap.appendChild(tricksInput);
+    } else {
+      const result = document.createElement("p");
+      result.className = "text-sm text-stone-300";
+      result.textContent = player.succeeded === true ? `Tricks won: ${player.currentTricks}` : state.phase === "bidding" ? "Unlocks after bids" : "Select Yes or No";
+      tricksWrap.appendChild(result);
     }
-    tricksWrap.appendChild(tricksInput);
 
     const voiceButton = document.createElement("button");
     voiceButton.type = "button";
@@ -399,18 +436,20 @@ function createNumberInput(playerIndex, field, value, maxValue, disabled) {
     "w-full rounded-2xl border border-white/10 bg-stone-950/50 px-4 py-3 text-lg font-semibold text-white outline-none transition focus:border-amber-300/60 disabled:cursor-not-allowed disabled:opacity-50";
   input.dataset.playerIndex = String(playerIndex);
   input.dataset.field = field;
+  input.setAttribute("aria-label", `${findPlayerById(playerIndex).name}: ${field === "currentBid" ? "bid" : "actual tricks"}`);
   input.addEventListener("input", handleNumericInput);
   return input;
 }
 
 function getEntryHint(isDealer, forbiddenBid, cards) {
   if (state.phase === "bidding") {
+    if (isDealer && forbiddenBid === null) return "Waiting for the other players' bids.";
     if (isDealer && forbiddenBid !== null && forbiddenBid >= 0 && forbiddenBid <= cards) {
       return `Enter predicted tricks. Forbidden bid: ${forbiddenBid}.`;
     }
     return "Enter predicted tricks first. Tricks unlock after bid confirmation.";
   }
-  return "Bids are locked. Enter the actual tricks won.";
+  return "Choose Yes for an exact bid, or No and enter actual tricks.";
 }
 
 function handleNumericInput(event) {
@@ -419,14 +458,17 @@ function handleNumericInput(event) {
   const round = getCurrentRound();
   const numericValue = event.target.value === "" ? null : Number(event.target.value);
 
-  if (numericValue !== null && (numericValue < 0 || numericValue > round.cards)) {
+  if (numericValue !== null && !isValidTrickCount(numericValue, round.cards)) {
     event.target.value = "";
     findPlayerById(playerIndex)[field] = null;
+    renderHookWarning();
+    renderScoreboard();
     return;
   }
 
   findPlayerById(playerIndex)[field] = numericValue;
   if (state.phase === "bidding") renderHookWarning();
+  renderScoreboard();
 }
 
 function handleContinue() {
@@ -438,9 +480,10 @@ function handleContinue() {
 }
 
 function submitBids() {
+  if (state.phase !== "bidding") return;
   const round = getCurrentRound();
   const activePlayers = getActivePlayers();
-  const incomplete = activePlayers.find((player) => player.currentBid === null || player.currentBid === "");
+  const incomplete = activePlayers.find((player) => !isValidTrickCount(player.currentBid, round.cards));
   if (incomplete) {
     window.alert("Enter a bid for every player before continuing.");
     return;
@@ -453,6 +496,7 @@ function submitBids() {
     return;
   }
 
+  stopVoiceCapture({ clearPending: true, updateStatus: false });
   state.phase = "results";
   state.voiceTarget = null;
   state.pendingTargetIndex = null;
@@ -463,11 +507,18 @@ function submitBids() {
 }
 
 function submitResults() {
+  if (state.phase !== "results") return;
   const round = getCurrentRound();
   const activePlayers = getActivePlayers();
-  const incomplete = activePlayers.find((player) => player.currentTricks === null || player.currentTricks === "");
+  const incomplete = activePlayers.find((player) => player.succeeded === null || !isValidTrickCount(player.currentTricks, round.cards));
   if (incomplete) {
     window.alert("Enter tricks won for every player before scoring the round.");
+    return;
+  }
+
+  const inconsistent = activePlayers.find((player) => player.succeeded !== (player.currentBid === player.currentTricks));
+  if (inconsistent) {
+    window.alert(`${inconsistent.name}: actual tricks match the bid. Select Yes, or correct the actual tricks.`);
     return;
   }
 
@@ -493,6 +544,7 @@ function submitResults() {
     summary.players.push({ name: player.name, bid, tricks, roundScore });
     player.currentBid = null;
     player.currentTricks = null;
+    player.succeeded = null;
   });
 
   state.players
@@ -566,17 +618,16 @@ function renderHistory() {
 }
 
 function resetCurrentPhaseEntries() {
-  if (state.phase === "bidding") {
-    getActivePlayers().forEach((player) => {
-      player.currentBid = null;
-      player.currentTricks = null;
-    });
-  } else {
-    getActivePlayers().forEach((player) => {
-      player.currentTricks = null;
-    });
-  }
+  if (!["bidding", "results"].includes(state.phase)) return;
   stopVoiceCapture({ clearPending: true });
+  state.conversationalMode = false;
+  updateConversationalButton();
+  getActivePlayers().forEach((player) => {
+    player.currentBid = null;
+    player.currentTricks = null;
+    player.succeeded = null;
+  });
+  state.phase = "bidding";
   renderGame();
 }
 
@@ -598,6 +649,7 @@ function updateConversationalButton() {
 }
 
 function startConversationalSequence() {
+  if (!state.conversationalMode || !["bidding", "results"].includes(state.phase)) return;
   if (!recognition) {
     updateVoiceStatus("Speech recognition unavailable in this browser.");
     return;
@@ -625,6 +677,7 @@ function startConversationalSequence() {
 }
 
 function beginVoiceCapture(playerIndex, options = {}) {
+  if (!["bidding", "results"].includes(state.phase) || !findPlayerById(playerIndex)?.active) return;
   if (!recognition || state.voicePermissionDenied) return;
   state.pendingTargetIndex = playerIndex;
 
@@ -637,6 +690,8 @@ function beginVoiceCapture(playerIndex, options = {}) {
 }
 
 function launchRecognition(playerIndex, options = {}) {
+  if (!["bidding", "results"].includes(state.phase)) return;
+  const generation = ++state.voiceGeneration;
   const player = findPlayerById(playerIndex);
   state.voiceOptions = options;
   state.voiceOutcome = "pending";
@@ -645,6 +700,7 @@ function launchRecognition(playerIndex, options = {}) {
   updateVoiceStatus(`Preparing voice capture for ${player.name}...`);
 
   const startListening = () => {
+    if (generation !== state.voiceGeneration) return;
     try {
       recognition.abort();
     } catch (error) {
@@ -652,6 +708,7 @@ function launchRecognition(playerIndex, options = {}) {
     }
 
     setTimeout(() => {
+      if (generation !== state.voiceGeneration) return;
       try {
         recognition.start();
         state.recognitionActive = true;
@@ -675,6 +732,10 @@ function launchRecognition(playerIndex, options = {}) {
 }
 
 function stopVoiceCapture({ clearPending = false, updateStatus = true } = {}) {
+  state.voiceGeneration += 1;
+  state.voiceTarget = null;
+  state.voiceOutcome = "stopped";
+  synth?.cancel();
   if (clearPending) {
     state.pendingTargetIndex = null;
   }
@@ -705,7 +766,17 @@ function createRecognition() {
     const parsedNumber = parseSpokenNumber(transcript);
     const targetIndex = state.voiceTarget;
 
-    if (typeof targetIndex !== "number") return;
+    if (typeof targetIndex !== "number" || !["bidding", "results"].includes(state.phase) || !findPlayerById(targetIndex)?.active) return;
+
+    const player = findPlayerById(targetIndex);
+    if (state.phase === "results" && /^(yes|no)[.!?]*$/i.test(transcript)) {
+      player.succeeded = /^yes/i.test(transcript);
+      player.currentTricks = player.succeeded ? player.currentBid : null;
+      state.voiceOutcome = "success";
+      updateVoiceStatus(player.succeeded ? `${player.name}: recorded ${player.currentBid}.` : `${player.name}: enter or say the actual tricks won.`);
+      renderGame();
+      return;
+    }
 
     if (parsedNumber === null) {
       state.voiceOutcome = "unparsed";
@@ -724,6 +795,7 @@ function createRecognition() {
       findPlayerById(targetIndex).currentBid = parsedNumber;
     } else {
       findPlayerById(targetIndex).currentTricks = parsedNumber;
+      player.succeeded = parsedNumber === player.currentBid;
     }
 
     state.voiceOutcome = "success";
@@ -765,8 +837,9 @@ function createRecognition() {
     state.pendingTargetIndex = null;
 
     if (state.conversationalMode && state.voiceOutcome === "success") {
+      const generation = state.voiceGeneration;
       setTimeout(() => {
-        startConversationalSequence();
+        if (generation === state.voiceGeneration) startConversationalSequence();
       }, 300);
     }
   };
@@ -799,7 +872,9 @@ function speakPromptForPlayer(playerIndex, onComplete) {
   const player = findPlayerById(playerIndex);
   const field = state.phase === "bidding" ? "bid" : "tricks won";
   const utterance = new SpeechSynthesisUtterance(
-    `${player.name}, say your ${field} for ${round.cards} cards.`
+    state.phase === "results" && player.succeeded !== false
+      ? `${player.name}, did you succeed? Say yes or no, or say your actual tricks won.`
+      : `${player.name}, say your ${field} for ${round.cards} cards.`
   );
   utterance.lang = "en-IN";
   utterance.onend = () => {
@@ -816,6 +891,7 @@ function updateVoiceStatus(message) {
 }
 
 function finishGame(reason) {
+  state.phase = "finished";
   stopVoiceCapture({ clearPending: true, updateStatus: false });
   state.finalReason = reason;
   elements.gameView.classList.add("hidden");
